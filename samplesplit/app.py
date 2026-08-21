@@ -9,6 +9,7 @@ import logging
 import importlib.util
 import json
 import os
+import subprocess
 import time
 import wave
 import zipfile
@@ -27,6 +28,7 @@ from .analysis import classify_stems, detect_music_metadata
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_AUDIO_SECONDS = 60
 ALLOWED_EXTENSIONS = {".mp3", ".wav"}
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
@@ -76,6 +78,45 @@ def wav_duration(path: Path) -> float | None:
         with wave.open(str(path), "rb") as audio:
             return audio.getnframes() / audio.getframerate()
     except (wave.Error, OSError, ZeroDivisionError):
+        return None
+
+
+def source_audio_duration(path: Path) -> float | None:
+    if path.suffix.lower() == ".wav":
+        duration = wav_duration(path)
+        if duration is not None:
+            return duration
+    configured_ffprobe = os.environ.get("SAMPLESPLIT_FFPROBE")
+    if not configured_ffprobe:
+        configured_ffmpeg = os.environ.get("SAMPLESPLIT_FFMPEG")
+        sibling = Path(configured_ffmpeg).with_name("ffprobe") if configured_ffmpeg else None
+        configured_ffprobe = str(sibling) if sibling and sibling.is_file() else shutil.which("ffprobe")
+    if not configured_ffprobe:
+        logger.error("audio_duration_probe_failed reason=ffprobe_unavailable")
+        return None
+    try:
+        result = subprocess.run(
+            [
+                configured_ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            logger.error("audio_duration_probe_failed exit_code=%s reason=%s", result.returncode, result.stderr.strip())
+            return None
+        duration = float(result.stdout.strip())
+        return duration if duration > 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        logger.error("audio_duration_probe_failed reason=%s", exc)
         return None
 
 
@@ -201,6 +242,11 @@ async def receive_audio(file: UploadFile, rights_confirmed: bool) -> tuple[Path,
     try:
         await save_upload(file, source)
         validate_audio_header(source, extension)
+        duration = source_audio_duration(source)
+        if duration is None:
+            raise HTTPException(status_code=422, detail="The audio duration could not be determined. Please choose another MP3 or WAV file.")
+        if duration > MAX_AUDIO_SECONDS:
+            raise HTTPException(status_code=413, detail="For this beta, tracks must be 60 seconds or shorter.")
     except Exception:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise

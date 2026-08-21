@@ -6,31 +6,19 @@ import sys
 import zipfile
 import os
 import logging
+import threading
+import time
 from pathlib import Path
 
 STEMS = ("vocals", "drums", "bass", "other")
 DEMUCS_TIMEOUT_SECONDS = 30 * 60
+DEMUCS_MODEL = os.environ.get("SAMPLESPLIT_DEMUCS_MODEL", "mdx_extra_q")
+DEMUCS_JOB_LOCK = threading.Lock()
 logger = logging.getLogger("samplesplit.processing")
 
 
 class ProcessingError(RuntimeError):
     pass
-
-
-def _temporary_mvp_placeholder_stems(demucs_source: Path, output_dir: Path) -> dict[str, Path]:
-    """Return four valid WAV copies when the Railway beta cannot run Demucs."""
-    # TEMPORARY MVP FALLBACK: keep downloads working until Demucs moves to a GPU worker.
-    track_dir = output_dir / "htdemucs" / demucs_source.stem
-    track_dir.mkdir(parents=True, exist_ok=True)
-    paths = {stem: track_dir / f"{stem}.wav" for stem in STEMS}
-    for path in paths.values():
-        shutil.copyfile(demucs_source, path)
-    (track_dir / "TEMPORARY_MVP_FALLBACK.txt").write_text(
-        "Temporary MVP fallback: Demucs failed, so each WAV contains the decoded source audio.\n",
-        encoding="utf-8",
-    )
-    logger.warning("demucs_temporary_mvp_fallback source=%s placeholders=%s", demucs_source.name, ",".join(STEMS))
-    return paths
 
 
 def separate_with_demucs(source: Path, work_dir: Path) -> dict[str, Path]:
@@ -54,13 +42,27 @@ def separate_with_demucs(source: Path, work_dir: Path) -> dict[str, Path]:
         "-m",
         "demucs",
         "--name",
-        "htdemucs",
+        DEMUCS_MODEL,
+        "--device",
+        "cpu",
+        "--jobs",
+        "1",
+        "--shifts",
+        "0",
+        "--overlap",
+        "0.1",
+        "--segment",
+        "10",
         "--out",
         str(output_dir),
         str(demucs_source),
     ]
     environment = os.environ.copy()
     environment.setdefault("TORCH_HOME", str(Path.cwd() / ".model-cache"))
+    environment.setdefault("OMP_NUM_THREADS", "1")
+    environment.setdefault("MKL_NUM_THREADS", "1")
+    environment.setdefault("OPENBLAS_NUM_THREADS", "1")
+    environment.setdefault("NUMEXPR_NUM_THREADS", "1")
     configured_ffmpeg = os.environ.get("SAMPLESPLIT_FFMPEG")
     if configured_ffmpeg:
         tool_dir = work_dir / "tools"
@@ -69,30 +71,49 @@ def separate_with_demucs(source: Path, work_dir: Path) -> dict[str, Path]:
         if not ffmpeg_link.exists():
             ffmpeg_link.symlink_to(Path(configured_ffmpeg).resolve())
         environment["PATH"] = f"{tool_dir}{os.pathsep}{environment.get('PATH', '')}"
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            env=environment,
-            timeout=DEMUCS_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.error("demucs_subprocess_failed reason=%s", exc)
-        # TEMPORARY MVP FALLBACK: use the decoded track for every stem on Demucs failure.
-        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
+    logger.info("demucs_waiting model=%s device=cpu source=%s", DEMUCS_MODEL, demucs_source.name)
+    with DEMUCS_JOB_LOCK:
+        started_at = time.monotonic()
+        logger.info("demucs_start model=%s device=cpu jobs=1 source=%s", DEMUCS_MODEL, demucs_source.name)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=DEMUCS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.error("demucs_failed model=%s reason=timeout seconds=%s", DEMUCS_MODEL, DEMUCS_TIMEOUT_SECONDS)
+            raise ProcessingError("Processing timed out during stem separation.") from exc
+        except OSError as exc:
+            logger.exception("demucs_failed model=%s reason=subprocess_launch_error detail=%s", DEMUCS_MODEL, exc)
+            raise ProcessingError(f"Stem separation could not start: {exc}") from exc
     if result.returncode != 0:
-        logger.error("demucs_failed exit_code=%s\nstdout:\n%s\nstderr:\n%s", result.returncode, result.stdout, result.stderr)
-        # TEMPORARY MVP FALLBACK: use the decoded track for every stem on Demucs failure.
-        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
+        detail = (result.stderr or result.stdout).strip()
+        logger.error(
+            "demucs_failed model=%s exit_code=%s reason=%s\nstdout:\n%s\nstderr:\n%s",
+            DEMUCS_MODEL,
+            result.returncode,
+            detail or "No Demucs error detail was returned.",
+            result.stdout,
+            result.stderr,
+        )
+        final_detail = detail.splitlines()[-1] if detail else "No Demucs error detail was returned."
+        raise ProcessingError(f"Stem separation failed. {final_detail}")
 
-    track_dir = output_dir / "htdemucs" / demucs_source.stem
+    logger.info(
+        "demucs_complete model=%s device=cpu seconds=%.1f source=%s",
+        DEMUCS_MODEL,
+        time.monotonic() - started_at,
+        demucs_source.name,
+    )
+    track_dir = output_dir / DEMUCS_MODEL / demucs_source.stem
     paths = {stem: track_dir / f"{stem}.wav" for stem in STEMS}
     missing = [stem for stem, path in paths.items() if not path.exists()]
     if missing:
-        logger.error("demucs_missing_outputs stems=%s", ",".join(missing))
-        # TEMPORARY MVP FALLBACK: incomplete Demucs output is treated as a failed run.
-        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
+        logger.error("demucs_failed model=%s reason=missing_outputs stems=%s", DEMUCS_MODEL, ",".join(missing))
+        raise ProcessingError(f"Demucs did not create: {', '.join(missing)}")
     return paths
 
 
