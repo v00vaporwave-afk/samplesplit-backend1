@@ -6,8 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TORCH_HOME=/var/cache/samplesplit/torch \
     HF_HOME=/var/cache/samplesplit/huggingface \
     SAMPLESPLIT_DEMUCS_PYTHON=/usr/local/bin/python \
+    SAMPLESPLIT_DEMUCS_MODEL=mdx_extra_q \
     SAMPLESPLIT_ANALYSIS_PYTHON=/usr/local/bin/python \
-    SAMPLESPLIT_FFMPEG=/usr/bin/ffmpeg
+    SAMPLESPLIT_FFMPEG=/usr/bin/ffmpeg \
+    SAMPLESPLIT_FFPROBE=/usr/bin/ffprobe \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1
 
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
