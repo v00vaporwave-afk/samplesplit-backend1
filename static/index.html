@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Turn your tracks into organized stems and loops.">
+  <title>SampleSplit</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="brand"><span class="brand-mark">S</span><span>SampleSplit</span></header>
+    <section class="hero">
+      <div class="eyebrow"><span></span> LOCAL AUDIO TOOL</div>
+      <h1>Turn your tracks into<br><em>organized stems and loops.</em></h1>
+      <p class="intro">Separate your authorized audio into vocals, drums, bass, and other, then create clean 4-bar loops.</p>
+
+      <div class="workspace">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose an MP3 or WAV file">
+          <input id="fileInput" type="file" accept="audio/mpeg,audio/wav,.mp3,.wav" hidden>
+          <div class="upload-icon">↥</div>
+          <p id="dropTitle" class="drop-title">Drop your track here</p>
+          <p id="dropHint" class="drop-hint">or click to browse · MP3 or WAV · up to 100 MB</p>
+        </div>
+        <p class="rights-note">Only upload audio you created, own, licensed, or have permission to use. SampleSplit does not grant rights to copyrighted source material.</p>
+        <label class="confirmation"><input id="rightsCheckbox" type="checkbox"><span>I confirm that I created, own, licensed, or otherwise have permission to process this audio.</span></label>
+        <div id="status" class="status" aria-live="polite" hidden>
+          <div class="spinner" aria-hidden="true"></div>
+          <div><strong id="statusTitle">Working on your track</strong><p id="statusMessage">This can take several minutes.</p></div>
+        </div>
+        <p id="error" class="error" role="alert" hidden></p>
+        <button id="processButton" class="button primary" type="button" disabled>Process Track <span>→</span></button>
+        <a id="downloadButton" class="button success" href="#" hidden>Download Sample Pack <span>↓</span></a>
+        <p id="downloadNotice" class="download-notice" hidden>You are responsible for ensuring that your use of exported stems and samples is permitted by the rights holders. SampleSplit does not grant you a license to the source audio.</p>
+      </div>
+
+      <div class="steps" aria-label="Processing steps">
+        <div><b>01</b><span>Separate</span><small>4 clean stems</small></div>
+        <div><b>02</b><span>Detect</span><small>BPM &amp; beats</small></div>
+        <div><b>03</b><span>Chop</span><small>4-bar loops</small></div>
+        <div><b>04</b><span>Pack</span><small>Ready-to-use ZIP</small></div>
+      </div>
+      <p class="privacy">Uploaded files are processed privately and are not published or shared with other users.</p>
+      <p class="ownership">Temporary uploaded audio, stems, and loops are deleted automatically after download or after two hours.</p>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
