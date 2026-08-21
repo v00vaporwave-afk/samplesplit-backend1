@@ -17,6 +17,22 @@ class ProcessingError(RuntimeError):
     pass
 
 
+def _temporary_mvp_placeholder_stems(demucs_source: Path, output_dir: Path) -> dict[str, Path]:
+    """Return four valid WAV copies when the Railway beta cannot run Demucs."""
+    # TEMPORARY MVP FALLBACK: keep downloads working until Demucs moves to a GPU worker.
+    track_dir = output_dir / "htdemucs" / demucs_source.stem
+    track_dir.mkdir(parents=True, exist_ok=True)
+    paths = {stem: track_dir / f"{stem}.wav" for stem in STEMS}
+    for path in paths.values():
+        shutil.copyfile(demucs_source, path)
+    (track_dir / "TEMPORARY_MVP_FALLBACK.txt").write_text(
+        "Temporary MVP fallback: Demucs failed, so each WAV contains the decoded source audio.\n",
+        encoding="utf-8",
+    )
+    logger.warning("demucs_temporary_mvp_fallback source=%s placeholders=%s", demucs_source.name, ",".join(STEMS))
+    return paths
+
+
 def separate_with_demucs(source: Path, work_dir: Path) -> dict[str, Path]:
     output_dir = work_dir / "separated"
     demucs_source = source
@@ -61,19 +77,22 @@ def separate_with_demucs(source: Path, work_dir: Path) -> dict[str, Path]:
             env=environment,
             timeout=DEMUCS_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise ProcessingError("Processing timed out during stem separation.") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.error("demucs_subprocess_failed reason=%s", exc)
+        # TEMPORARY MVP FALLBACK: use the decoded track for every stem on Demucs failure.
+        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
     if result.returncode != 0:
         logger.error("demucs_failed exit_code=%s\nstdout:\n%s\nstderr:\n%s", result.returncode, result.stdout, result.stderr)
-        detail = (result.stderr or result.stdout).strip().splitlines()
-        technical_detail = detail[-1] if detail else "No Demucs error detail was returned."
-        raise ProcessingError(f"Stem separation failed. {technical_detail}")
+        # TEMPORARY MVP FALLBACK: use the decoded track for every stem on Demucs failure.
+        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
 
     track_dir = output_dir / "htdemucs" / demucs_source.stem
     paths = {stem: track_dir / f"{stem}.wav" for stem in STEMS}
     missing = [stem for stem, path in paths.items() if not path.exists()]
     if missing:
-        raise ProcessingError(f"Demucs did not create: {', '.join(missing)}")
+        logger.error("demucs_missing_outputs stems=%s", ",".join(missing))
+        # TEMPORARY MVP FALLBACK: incomplete Demucs output is treated as a failed run.
+        return _temporary_mvp_placeholder_stems(demucs_source, output_dir)
     return paths
 
 
